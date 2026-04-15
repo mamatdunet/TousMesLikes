@@ -276,13 +276,21 @@ async def upload_file(
     conn = get_db()
     inserted_ids = []
     skipped = 0
+
+    # Build set of existing raw_json hashes for fast dedup (batch check)
+    platform_name = items[0]["platform"] if items else platform
+    existing_hashes = set()
+    rows = conn.execute(
+        "SELECT raw_json FROM items WHERE platform = ?", (platform_name,)
+    ).fetchall()
+    for r in rows:
+        if r[0]:
+            existing_hashes.add(r[0])
+    logger.info(f"[upload] Loaded {len(existing_hashes)} existing items for dedup")
+
     for item in items:
-        # Deduplicate: skip if same platform + raw_json already exists
-        existing = conn.execute(
-            "SELECT id FROM items WHERE platform = ? AND raw_json = ? LIMIT 1",
-            (item["platform"], item.get("raw_json")),
-        ).fetchone()
-        if existing:
+        raw = item.get("raw_json", "")
+        if raw in existing_hashes:
             skipped += 1
             continue
 
@@ -293,6 +301,7 @@ async def upload_file(
              item.get("url"), item.get("author"), item.get("created_at"), item.get("raw_json")),
         )
         inserted_ids.append(cursor.lastrowid)
+        existing_hashes.add(raw)
 
     conn.commit()
     if skipped:
@@ -633,109 +642,98 @@ def get_topic_graph(min_count: int = Query(20), min_link: int = Query(5)):
 
 
 @app.get("/api/collections")
-def get_collections(limit: int = Query(12)):
+def get_collections(limit: int = Query(16)):
     """Get auto-generated thematic collections (like Google Photos Memories).
 
-    Groups items by top categories, picks a representative sample with images.
+    Fast version: uses pre-built media index instead of scanning disk per item.
     """
-    conn = get_db()
-    rows = conn.execute("SELECT id, platform, title, content, url, categories, created_at FROM items WHERE categories != '[]'").fetchall()
-
+    import re as _re
     from collections import defaultdict
-    cat_items: dict[str, list] = defaultdict(list)
 
+    conn = get_db()
+
+    # 1. Get category counts (fast SQL)
+    rows = conn.execute("SELECT categories FROM items WHERE categories != '[]'").fetchall()
+    cat_counts: dict[str, int] = {}
     for row in rows:
         try:
-            cats = json.loads(row[5])
-            for cat in cats:
-                cat_items[cat].append(dict(row))
+            for cat in json.loads(row[0]):
+                cat_counts[cat] = cat_counts.get(cat, 0) + 1
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # Sort categories by count, take top ones
-    top_cats = sorted(cat_items.keys(), key=lambda c: len(cat_items[c]), reverse=True)[:limit * 2]
+    top_cats = sorted(cat_counts.keys(), key=lambda c: cat_counts[c], reverse=True)[:limit]
 
+    # 2. Build media index ONCE (scan disk once, not per item)
+    media_files = set(f.name for f in MEDIA_PATH.iterdir() if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"))
+
+    # 3. For each top category, find ONE cover image efficiently
     collections = []
-    seen_cats = set()
-
     for cat in top_cats:
-        if len(collections) >= limit:
-            break
-        # Skip if too similar to an already-added collection
-        if cat in seen_cats:
-            continue
+        # Get a few items from this category with URLs
+        sample_rows = conn.execute(
+            """SELECT id, platform, title, url, raw_json FROM items
+               WHERE categories LIKE ? AND url != '' AND url IS NOT NULL
+               LIMIT 30""",
+            (f'%"{cat}"%',),
+        ).fetchall()
 
-        items = cat_items[cat]
-        # Find items with media (images)
-        media_items = []
-        for item in items[:200]:  # Check first 200 items
-            item_id = item["id"]
-            # Check for media files
-            has_media = False
-            import re as _re
-            if item.get("platform") == "twitter":
-                m = _re.search(r"/status/(\d+)", item.get("url", ""))
+        # Get platforms
+        platform_rows = conn.execute(
+            """SELECT DISTINCT platform FROM items WHERE categories LIKE ? LIMIT 6""",
+            (f'%"{cat}"%',),
+        ).fetchall()
+        platforms = [r[0] for r in platform_rows]
+
+        # Find cover: check if any sample item has a media file
+        cover = None
+        for sr in sample_rows:
+            item_id, platform, title, url, raw_json = sr
+            if platform == "twitter":
+                m = _re.search(r"/status/(\d+)", url or "")
                 if m:
-                    tweet_id = m.group(1)
-                    has_media = bool(list(MEDIA_PATH.glob(f"{tweet_id}-*.[jp]*")))
-            elif item.get("platform") == "instagram":
-                has_media = bool(list(MEDIA_PATH.glob(f"ig_{item_id}_*.[jp]*")))
-            elif item.get("platform") == "facebook":
-                has_media = bool(list(MEDIA_PATH.glob(f"fb_{item_id}_*.[jp]*")))
-            elif item.get("platform") == "linkedin":
-                has_media = bool(list(MEDIA_PATH.glob(f"li_{item_id}_*.[jp]*")))
-            elif item.get("platform") == "reddit":
+                    prefix = m.group(1) + "-"
+                    match = next((f for f in media_files if f.startswith(prefix)), None)
+                    if match:
+                        cover = f"/media/{match}"
+                        break
+            elif platform == "instagram":
+                prefix = f"ig_{item_id}_"
+                match = next((f for f in media_files if f.startswith(prefix)), None)
+                if match:
+                    cover = f"/media/{match}"
+                    break
+            elif platform == "facebook":
+                prefix = f"fb_{item_id}_"
+                match = next((f for f in media_files if f.startswith(prefix)), None)
+                if match:
+                    cover = f"/media/{match}"
+                    break
+            elif platform == "linkedin":
+                prefix = f"li_{item_id}_"
+                match = next((f for f in media_files if f.startswith(prefix)), None)
+                if match:
+                    cover = f"/media/{match}"
+                    break
+            elif platform == "reddit":
                 try:
-                    raw = json.loads(item.get("raw_json", "{}")) if isinstance(item.get("raw_json"), str) else {}
+                    raw = json.loads(raw_json or "{}")
                     post_id = raw.get("id", "")
-                    has_media = bool(list(MEDIA_PATH.glob(f"reddit_{post_id}_*.[jp]*")))
+                    if post_id:
+                        prefix = f"reddit_{post_id}_"
+                        match = next((f for f in media_files if f.startswith(prefix)), None)
+                        if match:
+                            cover = f"/media/{match}"
+                            break
                 except:
                     pass
 
-            if has_media:
-                media_items.append(item)
-
-        # Pick sample items: prefer those with media
-        sample = media_items[:4] if media_items else items[:4]
-
-        # Get cover image
-        cover = None
-        if media_items:
-            first = media_items[0]
-            first_id = first["id"]
-            platform = first.get("platform", "")
-            if platform == "twitter":
-                m = _re.search(r"/status/(\d+)", first.get("url", ""))
-                if m:
-                    imgs = list(MEDIA_PATH.glob(f"{m.group(1)}-*.[jp]*"))
-                    if imgs:
-                        cover = f"/media/{imgs[0].name}"
-            elif platform == "instagram":
-                imgs = list(MEDIA_PATH.glob(f"ig_{first_id}_*.[jp]*"))
-                if imgs:
-                    cover = f"/media/{imgs[0].name}"
-            elif platform == "facebook":
-                imgs = list(MEDIA_PATH.glob(f"fb_{first_id}_*.[jp]*"))
-                if imgs:
-                    cover = f"/media/{imgs[0].name}"
-            elif platform == "linkedin":
-                imgs = list(MEDIA_PATH.glob(f"li_{first_id}_*.[jp]*"))
-                if imgs:
-                    cover = f"/media/{imgs[0].name}"
-
-        platforms = list(set(item.get("platform") for item in items[:100] if item.get("platform")))
-
         collections.append({
             "category": cat,
-            "count": len(items),
-            "platforms": platforms[:5],
+            "count": cat_counts[cat],
+            "platforms": platforms,
             "cover": cover,
-            "sample": [
-                {"id": s["id"], "title": s.get("title", "")[:80], "platform": s.get("platform")}
-                for s in sample
-            ],
         })
-        seen_cats.add(cat)
 
     conn.close()
     return {"collections": collections}
@@ -949,31 +947,41 @@ def rag_chat(body: dict):
     if not ollama_client.has_model(ollama_client.CHAT_MODEL):
         raise HTTPException(503, f"Chat model not found. Run 'ollama pull {ollama_client.CHAT_MODEL}'.")
 
-    # 1. Semantic search to find relevant items
-    try:
-        results = semantic_search(query, n_results=10)
-    except Exception:
-        results = []
-
-    # 2. Also do FTS search for keyword matches
+    # 1. FTS search FIRST (best for keyword-based queries)
     conn = get_db()
-    fts_query = query.replace('"', '""')
+    # Extract individual words for FTS query
+    fts_words = [w for w in query.split() if len(w) > 2]
+    fts_query = " OR ".join(f'"{w}"' for w in fts_words) if fts_words else query.replace('"', '""')
+    fts_rows = []
     try:
         fts_rows = conn.execute(
             """SELECT items.* FROM items_fts
                JOIN items ON items.id = items_fts.rowid
                WHERE items_fts MATCH ?
-               ORDER BY rank LIMIT 10""",
+               ORDER BY rank LIMIT 15""",
             (fts_query,),
         ).fetchall()
     except Exception:
-        fts_rows = []
+        pass
 
-    # 3. Combine results (semantic + FTS), deduplicate
+    # 2. Semantic search as complement
+    try:
+        results = semantic_search(query, n_results=10)
+    except Exception:
+        results = []
+
+    # 3. Combine results — FTS FIRST (more precise for keyword queries), then semantic
     seen_ids = set()
     context_items = []
 
-    # Semantic results first (more relevant)
+    # FTS results first (more relevant for keyword queries)
+    for row in fts_rows:
+        item = dict(row)
+        if item["id"] not in seen_ids:
+            context_items.append(item)
+            seen_ids.add(item["id"])
+
+    # Then semantic results
     for r in results:
         if r["id"] not in seen_ids:
             row = conn.execute("SELECT * FROM items WHERE id = ?", (r["id"],)).fetchone()

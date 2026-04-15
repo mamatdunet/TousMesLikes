@@ -6,7 +6,7 @@ import ItemList from './components/ItemList';
 import IndexingBanner from './components/IndexingBanner';
 import ChatPanel from './components/ChatPanel';
 import OllamaStatus from './components/OllamaStatus';
-import { getStats, getItems, searchItems, semanticSearch, deleteAll, getIndexingStatus, getOllamaStatus } from './api';
+import { getStats, getItems, searchItems, semanticSearch, deleteAll, getIndexingStatus, getOllamaStatus, ragChat, getTopics } from './api';
 import { Trash2, X, MessageCircle } from 'lucide-react';
 
 function App() {
@@ -25,6 +25,10 @@ function App() {
   const currentPageRef = useRef(1);
   const [availableMonths, setAvailableMonths] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [aiAnswer, setAiAnswer] = useState(null);
+  const [allTopics, setAllTopics] = useState([]);
+  const [topicSearch, setTopicSearch] = useState('');
+  const [showTopicDropdown, setShowTopicDropdown] = useState(false);
   const sentinelRef = useRef(null);
   const [indexing, setIndexing] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -86,13 +90,15 @@ function App() {
   useEffect(() => {
     loadStats();
     loadItems();
+    getTopics().then((d) => setAllTopics(d.topics || [])).catch(() => {});
   }, [loadStats, loadItems]);
 
   const handleSearch = async (q, platform) => {
     setQuery(q);
     setActiveCategory(null);
+    setAiAnswer(null);
     currentPageRef.current = 1;
-    setHasMore(false);  // Search results don't paginate via infinite scroll
+    setHasMore(false);
     setTab('browse');
     setLoading(true);
     try {
@@ -109,16 +115,24 @@ function App() {
   const handleSemanticSearch = async (q, platform) => {
     setQuery(q);
     setActiveCategory(null);
+    setAiAnswer(null);
     currentPageRef.current = 1;
     setHasMore(false);
     setTab('browse');
     setLoading(true);
     try {
-      const data = await semanticSearch(q, { platform });
-      setItems(data.items);
-      setTotal(data.items.length);
+      // Use RAG chat endpoint — combines FTS + semantic + LLM
+      const [chatData, ftsData] = await Promise.all([
+        ragChat(q).catch(() => null),
+        searchItems(q, { platform }),
+      ]);
+      if (chatData?.answer) {
+        setAiAnswer(chatData.answer);
+      }
+      setItems(ftsData.items);
+      setTotal(ftsData.total);
     } catch (e) {
-      console.error('Semantic search failed:', e);
+      console.error('AI search failed:', e);
     } finally {
       setLoading(false);
     }
@@ -308,7 +322,7 @@ function App() {
         )}
 
         {tab === 'browse' && (
-          <div>
+          <div onClick={() => setShowTopicDropdown(false)}>
             {/* Platform filter bar */}
             <div className="flex items-center gap-2 mb-4 flex-wrap">
               {[
@@ -463,6 +477,71 @@ function App() {
                 </div>
               );
             })()}
+
+            {/* Category filter */}
+            {allTopics.length > 0 && (
+              <div className="relative mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500">Thématique :</span>
+                  {activeCategory ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
+                      {activeCategory}
+                      <button onClick={() => { setActiveCategory(null); currentPageRef.current = 1; loadItems({ platform: activePlatform, month: monthParam(activeMonths), sort: sortOrder }); }}>
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ) : (
+                    <div className="relative flex-1 max-w-xs">
+                      <input
+                        type="text"
+                        value={topicSearch}
+                        onChange={(e) => { setTopicSearch(e.target.value); setShowTopicDropdown(true); }}
+                        onFocus={() => setShowTopicDropdown(true)}
+                        placeholder="Rechercher une thématique..."
+                        className="w-full px-2.5 py-1 rounded-md border border-gray-200 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                      {showTopicDropdown && (
+                        <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white rounded-lg shadow-lg border border-gray-200 max-h-48 overflow-y-auto">
+                          {allTopics
+                            .filter((t) => !topicSearch || t.label.toLowerCase().includes(topicSearch.toLowerCase()))
+                            .slice(0, 20)
+                            .map((t) => (
+                              <button
+                                key={t.label}
+                                onClick={() => {
+                                  handleCategoryClick(t.label);
+                                  setTopicSearch('');
+                                  setShowTopicDropdown(false);
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 flex justify-between"
+                              >
+                                <span>{t.label}</span>
+                                <span className="text-gray-400">{t.count}</span>
+                              </button>
+                            ))}
+                          {allTopics.filter((t) => !topicSearch || t.label.toLowerCase().includes(topicSearch.toLowerCase())).length === 0 && (
+                            <div className="px-3 py-2 text-xs text-gray-400">Aucune thématique trouvée</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* AI Answer banner */}
+            {aiAnswer && (
+              <div className="mb-4 bg-purple-50 border border-purple-200 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-purple-600 text-sm font-semibold">Réponse IA</span>
+                  <button onClick={() => setAiAnswer(null)} className="ml-auto text-purple-400 hover:text-purple-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <p className="text-sm text-gray-700 whitespace-pre-line">{aiAnswer}</p>
+              </div>
+            )}
 
             {loading ? (
               <div className="text-center py-12 text-gray-400">Chargement...</div>
