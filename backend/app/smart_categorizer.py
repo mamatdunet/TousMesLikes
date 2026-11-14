@@ -14,6 +14,7 @@ import ollama as _ollama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.database import get_db
+from app.media import find_media
 import time as _time
 
 
@@ -47,7 +48,6 @@ logger = logging.getLogger("smart_categorizer")
 
 CHAT_MODEL = "mistral"
 VISION_MODEL = "llava"
-MEDIA_PATH = Path(__file__).parent.parent / "data" / "media"
 
 CATEGORIZE_PROMPT = """Tu es un expert en catégorisation de contenu. Analyse les contenus suivants et attribue 1 à 3 catégories pertinentes à chacun.
 
@@ -187,7 +187,7 @@ def find_item_images(item: dict) -> list[str]:
 
     images = []
     for pattern in patterns:
-        for f in MEDIA_PATH.glob(pattern):
+        for f in find_media(pattern.rstrip("*")):
             if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
                 images.append(str(f))
     return images[:3]  # Max 3 images per item

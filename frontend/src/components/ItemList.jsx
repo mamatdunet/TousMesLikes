@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ExternalLink, ChevronDown, ChevronUp, X } from 'lucide-react';
+import { ExternalLink, ChevronDown, ChevronUp, X, Archive } from 'lucide-react';
 
 function Linkify({ children }) {
   if (typeof children !== 'string') return children;
@@ -119,7 +119,7 @@ function formatDate(dateStr) {
   }
 }
 
-function ItemCard({ item }) {
+export function ItemCard({ item }) {
   const [expanded, setExpanded] = useState(false);
   const contentRef = useRef(null);
   const [isClamped, setIsClamped] = useState(false);
@@ -146,9 +146,10 @@ function ItemCard({ item }) {
               {item.platform}
             </span>
             <span className="text-xs text-gray-400">{item.type}</span>
-            {formattedDate && (
-              <span className="text-xs text-gray-400">{formattedDate}</span>
+            {item.source_number != null && (
+              <span className="text-xs font-semibold text-purple-600">[{item.source_number}]</span>
             )}
+            <span className="text-xs text-gray-400">{formattedDate || 'Date inconnue'}</span>
             {item.relevance_score != null && (
               <span className="text-xs text-purple-500 font-medium">
                 {(item.relevance_score * 100).toFixed(0)}% pertinent
@@ -202,6 +203,18 @@ function ItemCard({ item }) {
 
           <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
             {item.author && <span>par {item.author}</span>}
+            {item.url && (
+              <a
+                href={`https://web.archive.org/web/*/${item.url}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Voir les copies archivées par Internet Archive (Wayback Machine)"
+                className="inline-flex items-center gap-1 hover:text-gray-600"
+              >
+                <Archive className="w-3 h-3" />
+                Version archivée
+              </a>
+            )}
           </div>
         </div>
         {item.url && (

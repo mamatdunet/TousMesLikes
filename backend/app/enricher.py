@@ -16,6 +16,8 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
+from .media import MEDIA_PATH, remember_media
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 logger = logging.getLogger("tousmeslikes")
@@ -23,7 +25,6 @@ logger = logging.getLogger("tousmeslikes")
 APIFY_API_KEY = os.getenv("APIFY_API_KEY", "")
 APIFY_BASE = "https://api.apify.com/v2"
 X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")
-MEDIA_PATH = Path(__file__).parent.parent / "data" / "media"
 
 # Rate limiting
 REDDIT_DELAY = 1.5
@@ -35,15 +36,16 @@ X_API_DELAY = 1.0  # X API: 300 requests/15min = 1 per 3s, but 1s is usually fin
 
 def _download_media(url: str, filename: str) -> str | None:
     """Download a media file to the local media directory. Returns local path or None."""
-    MEDIA_PATH.mkdir(parents=True, exist_ok=True)
     dest = MEDIA_PATH / filename
     if dest.exists():
         return str(dest)
     try:
+        MEDIA_PATH.mkdir(parents=True, exist_ok=True)
         with httpx.Client(timeout=30, follow_redirects=True) as client:
             resp = client.get(url)
             if resp.status_code == 200:
                 dest.write_bytes(resp.content)
+                remember_media(filename)
                 return str(dest)
     except Exception as e:
         logger.debug(f"[media] Failed to download {url}: {e}")
