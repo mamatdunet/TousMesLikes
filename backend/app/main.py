@@ -1,6 +1,7 @@
 """TousMesLikes — API backend."""
 
 import logging
+import re
 import threading
 import time
 import glob as globmod
@@ -781,8 +782,9 @@ def list_items(
 
     # Sort order
     sort_map = {
-        "date_desc": "COALESCE(created_at, imported_at) DESC",
-        "date_asc": "COALESCE(created_at, imported_at) ASC",
+        # Items with an unknown date go last in both directions
+        "date_desc": "created_at IS NULL, COALESCE(created_at, imported_at) DESC",
+        "date_asc": "created_at IS NULL, COALESCE(created_at, imported_at) ASC",
         "imported_desc": "imported_at DESC",
     }
     order_by = sort_map.get(sort, sort_map["date_desc"])
@@ -1001,9 +1003,10 @@ def rag_chat(body: dict):
     conn.close()
 
     # 4. Build context string for the LLM
+    context_items = context_items[:15]  # Limit context size
     context_parts = []
-    for item in context_items[:15]:  # Limit context size
-        parts = []
+    for n, item in enumerate(context_items, 1):
+        parts = [f"[{n}]"]
         if item.get("platform"):
             parts.append(f"[{item['platform']}]")
         if item.get("type"):
@@ -1036,16 +1039,16 @@ def rag_chat(body: dict):
     except Exception as e:
         raise HTTPException(500, f"LLM error: {e}")
 
-    # Return answer + sources
-    sources = [
-        {
-            "id": item["id"],
-            "platform": item.get("platform"),
-            "title": item.get("title"),
-            "url": item.get("url"),
-        }
-        for item in context_items[:15]
-    ]
+    # Return answer + sources, the ones the answer cites as [n] first
+    cited = []
+    for m in re.finditer(r"\[(\d+)\]", answer):
+        n = int(m.group(1))
+        if 1 <= n <= len(context_items) and n not in cited:
+            cited.append(n)
+    order = cited + [n for n in range(1, len(context_items) + 1) if n not in cited]
+    sources = _enrich_with_media([
+        dict(context_items[n - 1], source_number=n, cited=n in cited) for n in order
+    ])
 
     return {
         "answer": answer,

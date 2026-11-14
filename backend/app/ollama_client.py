@@ -68,5 +68,6 @@ Règles :
 - Réponds en français sauf si la question est en anglais
 - Base-toi uniquement sur le contexte fourni
 - Si tu ne trouves pas la réponse dans le contexte, dis-le clairement
-- Cite les contenus pertinents quand c'est utile
+- Chaque contenu du contexte est numéroté [1], [2]… : cite le numéro entre crochets après chaque contenu que tu mentionnes
+- Ne mentionne que des contenus présents dans le contexte, et n'invente jamais de lien, d'auteur ni de sujet
 - Sois concis et direct"""

@@ -28,7 +28,8 @@ def _fix_fb_encoding(text: str) -> str:
 
 
 def _ts_to_iso(ts: int | None) -> str | None:
-    if not ts:
+    # Old exports use placeholder timestamps (e.g. 1) when the date is unknown
+    if not ts or ts < 946684800:
         return None
     try:
         return datetime.fromtimestamp(ts).isoformat()
@@ -48,6 +49,9 @@ def parse_facebook_likes(text: str) -> list[dict]:
         reaction = ""
         author = ""
         name = ""
+        link_title = ""
+        description = ""
+        message = ""
 
         for lv in entry.get("label_values", []):
             label = lv.get("label", "")
@@ -59,6 +63,12 @@ def parse_facebook_likes(text: str) -> list[dict]:
                 reaction = _fix_fb_encoding(value)
             elif label == "Nom":
                 name = _fix_fb_encoding(value)
+            elif label == "Titre":
+                link_title = _fix_fb_encoding(value)
+            elif label == "Description":
+                description = _fix_fb_encoding(value)
+            elif label == "Message":
+                message = _fix_fb_encoding(value)
 
             # Nested dict for owner info
             if "dict" in lv:
@@ -70,14 +80,19 @@ def parse_facebook_likes(text: str) -> list[dict]:
         if not author and name:
             author = name
 
-        title = f"{reaction} — {author}" if author else reaction or ""
+        # Older reactions to shared links carry the link's title and description
+        if link_title:
+            title = link_title
+        else:
+            title = f"{reaction} — {author}" if author else reaction or ""
         title = title[:120] if title else None
+        content = "\n\n".join(t for t in (message, description) if t) or reaction
 
         items.append({
             "platform": "facebook",
             "type": "reaction",
             "title": title,
-            "content": _fix_fb_encoding(reaction),
+            "content": content,
             "url": url,
             "author": author,
             "created_at": _ts_to_iso(entry.get("timestamp")),

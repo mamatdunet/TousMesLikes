@@ -3,6 +3,7 @@ import Upload from './components/Upload';
 import SearchBar from './components/SearchBar';
 import Dashboard from './components/Dashboard';
 import ItemList from './components/ItemList';
+import AiAnswer from './components/AiAnswer';
 import IndexingBanner from './components/IndexingBanner';
 import ChatPanel from './components/ChatPanel';
 import OllamaStatus from './components/OllamaStatus';
@@ -127,7 +128,7 @@ function App() {
         searchItems(q, { platform }),
       ]);
       if (chatData?.answer) {
-        setAiAnswer(chatData.answer);
+        setAiAnswer({ text: chatData.answer, sources: chatData.sources || [] });
       }
       setItems(ftsData.items);
       setTotal(ftsData.total);
@@ -531,17 +532,7 @@ function App() {
             )}
 
             {/* AI Answer banner */}
-            {aiAnswer && (
-              <div className="mb-4 bg-purple-50 border border-purple-200 rounded-xl p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-purple-600 text-sm font-semibold">Réponse IA</span>
-                  <button onClick={() => setAiAnswer(null)} className="ml-auto text-purple-400 hover:text-purple-600">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <p className="text-sm text-gray-700 whitespace-pre-line">{aiAnswer}</p>
-              </div>
-            )}
+            {aiAnswer && <AiAnswer answer={aiAnswer} onClose={() => setAiAnswer(null)} />}
 
             {loading ? (
               <div className="text-center py-12 text-gray-400">Chargement...</div>
