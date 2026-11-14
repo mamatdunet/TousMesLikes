@@ -11,9 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import json
 
-MEDIA_PATH = Path(__file__).parent.parent / "data" / "media"
-
 from .database import init_db, get_db
+from .media import MEDIA_PATH, find_media, media_names
 from .parsers import PARSERS
 from .enricher import (
     enrich_reddit_items, enrich_twitter_items, enrich_instagram_items,
@@ -131,8 +130,11 @@ app.add_middleware(
 )
 
 # Serve media files statically
-MEDIA_PATH.mkdir(parents=True, exist_ok=True)
-app.mount("/media", StaticFiles(directory=str(MEDIA_PATH)), name="media")
+try:
+    MEDIA_PATH.mkdir(parents=True, exist_ok=True)
+except OSError as e:
+    logger.warning(f"[media] Folder unavailable ({MEDIA_PATH}): {e}")
+app.mount("/media", StaticFiles(directory=str(MEDIA_PATH), check_dir=False), name="media")
 
 
 # ── Media lookup ──────────────────────────────────────────────────────────────
@@ -140,7 +142,7 @@ app.mount("/media", StaticFiles(directory=str(MEDIA_PATH)), name="media")
 @app.get("/api/media/{tweet_id}")
 def get_media_for_tweet(tweet_id: str):
     """Find all media files associated with a tweet ID."""
-    files = list(MEDIA_PATH.glob(f"{tweet_id}-*"))
+    files = find_media(f"{tweet_id}-")
     if not files:
         return {"media": []}
 
@@ -185,7 +187,7 @@ def _enrich_with_media(items: list[dict]) -> list[dict]:
                 except (json.JSONDecodeError, TypeError):
                     pass
             if tweet_id:
-                files = list(MEDIA_PATH.glob(f"{tweet_id}-*"))
+                files = find_media(f"{tweet_id}-")
                 for f in sorted(files):
                     ext = f.suffix.lower()
                     if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
@@ -201,7 +203,7 @@ def _enrich_with_media(items: list[dict]) -> list[dict]:
             except (json.JSONDecodeError, TypeError):
                 post_id = ""
             if post_id:
-                files = list(MEDIA_PATH.glob(f"reddit_{post_id}_*"))
+                files = find_media(f"reddit_{post_id}_")
                 for f in sorted(files):
                     ext = f.suffix.lower()
                     if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
@@ -213,7 +215,7 @@ def _enrich_with_media(items: list[dict]) -> list[dict]:
             # Instagram media files: ig_{item_id}_{index}.ext
             item_id = item.get("id", "")
             if item_id:
-                files = list(MEDIA_PATH.glob(f"ig_{item_id}_*"))
+                files = find_media(f"ig_{item_id}_")
                 for f in sorted(files):
                     ext = f.suffix.lower()
                     if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
@@ -224,7 +226,7 @@ def _enrich_with_media(items: list[dict]) -> list[dict]:
         elif platform == "facebook":
             item_id = item.get("id", "")
             if item_id:
-                files = list(MEDIA_PATH.glob(f"fb_{item_id}_*"))
+                files = find_media(f"fb_{item_id}_")
                 for f in sorted(files):
                     ext = f.suffix.lower()
                     if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
@@ -233,7 +235,7 @@ def _enrich_with_media(items: list[dict]) -> list[dict]:
         elif platform == "linkedin":
             item_id = item.get("id", "")
             if item_id:
-                files = list(MEDIA_PATH.glob(f"li_{item_id}_*"))
+                files = find_media(f"li_{item_id}_")
                 for f in sorted(files):
                     ext = f.suffix.lower()
                     if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
@@ -665,7 +667,7 @@ def get_collections(limit: int = Query(16)):
     top_cats = sorted(cat_counts.keys(), key=lambda c: cat_counts[c], reverse=True)[:limit]
 
     # 2. Build media index ONCE (scan disk once, not per item)
-    media_files = set(f.name for f in MEDIA_PATH.iterdir() if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"))
+    media_files = set(f.name for f in map(Path, media_names()) if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"))
 
     # 3. For each top category, find ONE cover image efficiently
     collections = []

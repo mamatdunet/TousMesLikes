@@ -12,7 +12,7 @@ Tu as déjà voulu retrouver un post, une vidéo ou un article que tu avais aim�
 - **Recherche** en plein texte (FTS) ou en sémantique (embeddings + RAG)
 - **Visualise** tes centres d'intérêt sous forme de collections thématiques et de graphes
 
-Tout tourne **en local** : tes données ne quittent jamais ta machine.
+Tout tourne **en local** : par défaut, tes données ne quittent jamais ta machine.
 
 ## 🧩 Stack technique
 
@@ -88,6 +88,15 @@ APIFY_API_KEY=your_apify_api_key
 ```
 
 Les deux sont **optionnelles** — l'app fonctionne sans, mais les posts ne seront enrichis que par Reddit (API publique gratuite).
+
+Pour stocker les médias ailleurs (NAS, disque externe), ajoute aussi :
+
+```bash
+# Dossier des médias (par défaut : backend/data/media)
+MEDIA_PATH=/Volumes/MonPartage/TousMesLikes-media
+```
+
+La base SQLite et ChromaDB restent dans `backend/data/` : SQLite ne fonctionne pas de façon fiable sur un partage réseau. Si le dossier n'est pas disponible, l'app démarre quand même, sans afficher les médias. S'il est synchronisé avec un service cloud, les médias sont aussi copiés chez ce service.
 
 ## 📥 Importer tes données
 
@@ -199,7 +208,7 @@ Tousmeslikes/
 
 - Tout tourne en local — aucun service cloud sauf les APIs d'enrichissement (Apify, X API) qui reçoivent uniquement les URLs publiques, pas tes données.
 - Aucune télémétrie.
-- Ton fichier `.env` et ta base de données ne quittent jamais ta machine.
+- Ton fichier `.env` et ta base de données ne quittent jamais ta machine. Les médias suivent le dossier choisi via `MEDIA_PATH`.
 
 ## 📜 Licence
 
